@@ -29,7 +29,8 @@ Cloud Run: 許可リストと照合 → 許可外の宛先を返す
 | `server/lib/allowlist.js` | ドメイン正規化と許可リスト照合ロジック |
 | `server/config/allowlist.json` | 同梱の許可ドメイン一覧 |
 | `scripts/build.js` | `addin/` を `server/public/` にコピーし URL を埋め込む |
-| `scripts/deploy.js` | ビルド → `gcloud run deploy` → URL 確定後に再デプロイ |
+| `scripts/deploy.js` | ビルド → `gcloud run deploy` → URL 確定後に再デプロイ（gcloud 派） |
+| `terraform/` | 同じ構成を Terraform で管理する場合（Terraform 派） |
 
 アドインの静的ファイルは同じ Cloud Run サービスから配信します。アドインと API が
 **同一オリジン**になるため CORS 設定が不要で、管理する URL も 1 つで済みます。
@@ -47,10 +48,14 @@ Cloud Run: 許可リストと照合 → 許可外の宛先を返す
   - classic Outlook for Windows: 2206 (build 15330.20196) 以上
   - Outlook for Mac: 16.65 (22082700) 以上
   - **Outlook モバイル（Android/iOS）は送信時イベント非対応**
-- Google Cloud プロジェクトと `gcloud` CLI
-- Node.js 20 以上
+- Google Cloud プロジェクト
+  - gcloud 派: `gcloud` CLI
+  - Terraform 派: Terraform 1.5 以上 と Application Default Credentials（`gcloud auth application-default login`）
+- Node.js 20 以上（Terraform 派でも plan 時のビルドに必要）
 
 ## 1. デプロイ
+
+### 1-a. gcloud スクリプトでデプロイする場合
 
 ```bash
 # 依存関係
@@ -77,6 +82,34 @@ gcloud run deploy domain-guard \
 > 手動で行う場合は `node scripts/build.js <サービス URL>` → `gcloud run deploy ...` の順に実行してください。
 > URL を事前に確定させたい場合は Cloud Run のカスタムドメインをマッピングし、
 > `BASE_URL=https://mail-guard.example.com node scripts/deploy.js ...` のように指定します。
+
+### 1-b. Terraform でデプロイする場合
+
+`gcloud` スクリプトの代わりに `terraform/` で同じ構成を宣言的に管理できます
+（Cloud Run functions、ソース用/許可リスト用の GCS バケット、専用サービスアカウント、公開 IAM）。
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars   # project_id などを編集
+terraform init
+terraform plan                                  # この時点で scripts/build.js が実行され server/public と dist/manifest.xml が生成される
+terraform apply
+```
+
+- **URL の埋め込みは 1 回の apply で完結します。** Cloud Run の決定的 URL
+  (`https://<name>-<プロジェクト番号>.<region>.run.app`) を plan 時に計算し、
+  `external` データソース経由で `scripts/build.js` を呼んで静的ファイルに埋め込んでから zip →
+  アップロード → 関数デプロイ、という順で処理します。したがって `terraform` を実行する環境に **Node.js が必要**です。
+- 許可リストは既定で GCS バケット（`<project>-<name>-config/allowlist.json`）に置かれ、
+  `server/config/allowlist.json` を編集して `terraform apply` すると関数の再デプロイなしで反映されます
+  （最大 5 分のキャッシュあり）。環境変数で指定したい場合は `allowed_domains` 変数を使います。
+- ビルド用・実行用に専用のサービスアカウントを作成し、デフォルトの Compute SA は使いません。
+  組織ポリシーで `allUsers` への公開が禁止されている場合（`iam.allowedPolicyMemberDomains`）は
+  apply が失敗するので、ポリシー側で例外を設定してください。
+- `terraform output` の `service_uri` が `base_url` と一致することを確認してください。
+  異なる場合（古い URL 形式のリージョンなど）は `base_url` 変数で実際の URL を指定して再 apply します。
+- state は既定でローカルです。チームで運用する場合は `versions.tf` の `backend "gcs"` を有効にしてください。
+- `terraform` 実行者には作成した 2 つのサービスアカウントに対する `iam.serviceAccounts.actAs` が必要です（プロジェクトのオーナー/編集者なら可）。
 
 ### 動作確認
 

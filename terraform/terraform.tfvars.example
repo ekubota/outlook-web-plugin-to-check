@@ -1,0 +1,20 @@
+# cp terraform.tfvars.example terraform.tfvars して編集する（terraform.tfvars は git 管理外）
+
+project_id = "my-gcp-project"
+region     = "asia-northeast1"
+name       = "domain-guard"
+
+# カスタムドメインを使う場合のみ（既定は Cloud Run の決定的 URL）
+# base_url = "https://mail-guard.example.com"
+
+# 許可リストを環境変数で直接指定する場合（GCS / 同梱 JSON より優先）
+# allowed_domains = ["example.com", "*.contoso.co.jp"]
+
+# 許可リストを GCS で管理する（既定 true。server/config/allowlist.json をアップロード）
+allowlist_in_gcs = true
+
+# API キーを要求する場合（addin/src/config.js の apiKey にも同じ値を入れてビルドすること）
+# api_key = "change-me"
+
+# コールドスタートを避けたい場合は 1 以上（常時課金される）
+min_instances = 0
