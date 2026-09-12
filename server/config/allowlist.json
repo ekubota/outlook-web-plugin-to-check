@@ -1,9 +1,9 @@
 {
-  "version": "2026-09-12",
+  "version": "2026-09-13",
   "comment": "送信を許可するドメイン。'*.example.com' はサブドメインのみに一致します（apex を許可するなら別行に 'example.com' も書いてください）。",
   "allowedDomains": [
     "example.com",
     "*.example.com",
-    "contoso.co.jp"
+    "yahoo.co.jp"
   ]
 }
