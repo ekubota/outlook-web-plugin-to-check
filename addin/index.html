@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>宛先ドメイン チェック</title>
+    <link rel="stylesheet" href="./src/dialog/dialog.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header class="head">
+        <img src="./assets/icon-32.png" width="32" height="32" alt="" />
+        <h1>宛先ドメイン チェック</h1>
+      </header>
+      <p class="lead">
+        Outlook 用アドインの配信元です。管理者はこのサイトの
+        <a href="./manifest.xml">manifest.xml</a> を Microsoft 365 管理センターに登録してください。
+      </p>
+      <ul class="list">
+        <li class="item"><a href="./api/allowlist">/api/allowlist</a> — 現在の許可ドメイン一覧</li>
+        <li class="item"><a href="./health">/health</a> — ヘルスチェック</li>
+      </ul>
+    </main>
+  </body>
+</html>
