@@ -1,0 +1,19 @@
+{
+  "name": "domain-guard-server",
+  "version": "1.0.0",
+  "description": "Cloud Run function that checks Outlook recipient domains against an allowlist, and serves the Outlook add-in static files.",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "functions-framework --target=domainGuard --port=8080",
+    "dev": "functions-framework --target=domainGuard --port=8080",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.4.2",
+    "@google-cloud/storage": "^7.14.0"
+  }
+}

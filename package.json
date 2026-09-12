@@ -1,0 +1,14 @@
+{
+  "name": "outlook-domain-guard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Outlook Web アドイン + Cloud Run Functions による送信前の宛先ドメインチェック",
+  "scripts": {
+    "icons": "node scripts/gen-icons.js",
+    "build": "node scripts/build.js",
+    "build:local": "node scripts/build.js http://localhost:8080",
+    "start": "npm run build:local && npm --prefix server start",
+    "test": "npm --prefix server test",
+    "deploy": "node scripts/deploy.js"
+  }
+}
