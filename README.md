@@ -38,12 +38,10 @@ Cloud Run: 許可リストと照合 → 許可外の宛先を返す
 
 - Microsoft 365 の職場・学校アカウント（Exchange Online）
   - **Outlook.com の個人アカウント（Hotmail/live.com 等）は非対応です。**
-    `OnMessageSend` はイベントベースアクティブ化の仕組みを使いますが、これは
-    「管理者が Microsoft 365 管理センターからテナントに配置する」ことが前提の機能で、
-    ユーザーが自分でサイドロードしただけでは自動起動しません
-    （[公式ドキュメント](https://learn.microsoft.com/office/dev/add-ins/develop/event-based-activation#behavior-and-limitations)）。
-    個人アカウントには管理センター／テナントという概念自体が無いため、この配置方法が使えず、
-    結果として送信時イベントは動作しません。
+    Smart Alerts（`OnMessageSend`）のサポートクライアント表はバックエンドが
+    Exchange Online / Exchange Server のマイルボックスに限定されており、
+    個人アカウントのバックエンドは対象外です
+    （[公式ドキュメントのサポート表](https://learn.microsoft.com/office/dev/add-ins/outlook/onmessagesend-onappointmentsend-events#supported-clients-and-platforms)）。
 - Outlook 要件セット **Mailbox 1.12** 以上
   - Outlook on the web / 新しい Outlook for Windows: 対応済み
   - classic Outlook for Windows: 2206 (build 15330.20196) 以上
@@ -92,21 +90,32 @@ curl -X POST https://<サービス URL>/api/check \
 
 ## 2. Outlook への登録
 
-> **重要:** `OnMessageSend` はイベントベースアクティブ化の仕組みを使うため、
-> 「ファイルから追加」による個人サイドロードでは**自動起動しません**。
-> テスト・本番を問わず、必ず下記の管理者配置（Microsoft 365 管理センター）が必要です
-> （[公式ドキュメントの説明](https://learn.microsoft.com/office/dev/add-ins/develop/event-based-activation#behavior-and-limitations)）。
+サイドロード（自分のアカウントでの動作確認用）と、管理者配置（組織展開・強制用）の
+2通りがあります。**`OnMessageSend` はサイドロードでも実際に発火します**
+（Microsoft 公式の [Smart Alerts walkthrough](https://learn.microsoft.com/office/dev/add-ins/outlook/smart-alerts-onmessagesend-walkthrough#try-it-out)
+もサイドロードして動作確認する手順です）。ただし、サイドロードしたアドインはユーザー自身が
+無効化・削除できてしまうため、**組織として送信時チェックを強制したい場合は管理者配置が必須**です。
 
-### 管理者として配置する（テスト・本番共通）
+| 配置方法 | 自分のアカウントで発火するか | 他ユーザーに強制できるか |
+| --- | --- | --- |
+| サイドロード（ファイルから追加） | する | しない（各自無効化・削除できる） |
+| Microsoft 365 管理センターで管理者配置 | する | する（組織全体に強制配布） |
+
+### 動作確認する（サイドロード）
+
+1. Outlook on the web を開く（Microsoft 365 の職場・学校アカウントでサインイン）
+2. 「設定（歯車）」→「アドインを管理」（または新しい Outlook の「アドインを取得」）
+3. 「マイ アドイン」→「カスタム アドイン」→「ファイルから追加」
+4. `dist/manifest.xml` を選択
+5. **ブラウザーをリロード**（イベントハンドラーの登録はリロード後に有効になります）
+
+### 組織全体に配布・強制する
 
 1. [Microsoft 365 管理センター](https://admin.microsoft.com/) →「設定」→「統合アプリ」→「カスタム アプリのアップロード」
 2. 「App type」で **Office Add-in**（Unified manifest ではなく add-in 専用マニフェスト）を選択
 3. `dist/manifest.xml` を選択してアップロード
-4. 割り当て先を選択（自分のアカウントのみでテストする場合は「特定のユーザー/グループ」で自分を指定）
+4. 割り当て先（全員 / 特定のユーザー・グループ）を選択
 5. 反映には最大 24 時間かかることがあります（通常は数時間〜）。対象ユーザーは Outlook をリロードしてください
-
-自分ひとりでテストする場合も、この手順でテナント管理者権限を使って**自分自身にのみ**割り当てれば OK です
-（管理者権限を持つ職場・学校アカウントが必要です）。
 
 ## 3. 許可ドメインの運用
 
