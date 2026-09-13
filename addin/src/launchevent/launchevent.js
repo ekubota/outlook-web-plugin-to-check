@@ -5,21 +5,34 @@
  *
  *   1. 宛先（宛先・CC・BCC）を取得
  *   2. Cloud Run の /api/check に渡して、許可ドメイン一覧に無い宛先を判定
- *   3. 該当があれば独自ダイアログを出し、「送信する / 送信しない」を確認
- *   4. 結果を event.completed({ allowEvent }) で Outlook に返す
+ *   3. 該当があれば event.completed({ allowEvent: false, errorMessage }) を返す
+ *      → マニフェストの SendMode="PromptUser" により、Outlook が
+ *        「このまま送信 / 送信しない」の 2 ボタン付きダイアログを表示する
+ *
+ * 注意: イベントハンドラー内では displayDialogAsync 等の UI API は使用できない
+ * （Microsoft の制限）ため、独自ダイアログではなく Smart Alerts 標準ダイアログを使う。
  */
 
 // 既定値。__BASE_URL__ はビルド時に置換される（config.js を読み込めない
 // classic Outlook の JavaScript ランタイムでも動くよう、ここにも持たせている）。
 var DEFAULTS = {
   apiBaseUrl: '__BASE_URL__',
-  timeoutMs: 8000,
+  timeoutMs: 3500,
   failMode: 'prompt',
-  maxRecipientsInDialog: 20,
+  maxRecipientsInMessage: 8,
   apiKey: '',
+  // 診断用: true のとき処理の各段階で /health?stage=... を呼ぶ（Cloud Run のログで追跡できる）。
+  // 送信のたびにリクエストが増えるため既定は無効。調査時のみ config.js で true にする
+  debugBeacon: false,
 };
 
 var CONFIG = (typeof window !== 'undefined' && window.DOMAIN_GUARD_CONFIG) || {};
+
+// Smart Alerts ダイアログの本文は 500 文字まで
+var MAX_MESSAGE_LENGTH = 500;
+
+// Outlook は 5 秒を超えると「予想以上に時間が掛かっています」を出すため、その前に必ず完了させる
+var HARD_DEADLINE_MS = 4500;
 
 function config(key, fallback) {
   var value = CONFIG[key];
@@ -32,7 +45,18 @@ function apiUrl(pathname) {
   return base + pathname;
 }
 
-/** Office の コールバック API を Promise 化する。 */
+/** 診断用ビーコン。失敗しても処理には影響させない。 */
+function beacon(stage) {
+  if (!config('debugBeacon', false)) return;
+  try {
+    var url = apiUrl('/health?stage=' + encodeURIComponent(String(stage).slice(0, 200)) + '&t=' + Date.now());
+    fetch(url, { method: 'GET', keepalive: true, cache: 'no-store' }).catch(function () {});
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+/** Office のコールバック API を Promise 化する。 */
 function asPromise(fn) {
   return new Promise(function (resolve, reject) {
     fn(function (result) {
@@ -80,10 +104,9 @@ function senderAddress() {
 
 function checkWithServer(recipients) {
   var controller = typeof AbortController === 'function' ? new AbortController() : null;
-  var timeoutMs = config('timeoutMs', 8000);
   var timer = setTimeout(function () {
     if (controller) controller.abort();
-  }, timeoutMs);
+  }, config('timeoutMs', 3500));
 
   var headers = { 'Content-Type': 'application/json' };
   var apiKey = config('apiKey', '');
@@ -109,144 +132,146 @@ function checkWithServer(recipients) {
     });
 }
 
-/** ブロック対象をダイアログ URL のクエリに詰める。 */
-function buildDialogUrl(result) {
-  var limit = config('maxRecipientsInDialog', 20);
+var TYPE_LABEL = { to: '宛先', cc: 'CC', bcc: 'BCC' };
+
+/** ブロック対象の宛先を、ダイアログ本文（500 文字以内）に整形する。 */
+function buildMessage(result) {
   var blocked = result.blocked || [];
-  var payload = {
-    domains: result.blockedDomains || [],
-    recipients: blocked.slice(0, limit).map(function (b) {
-      return { a: b.address, n: b.displayName, t: b.type, d: b.domain, r: b.reason };
-    }),
-    more: Math.max(0, blocked.length - limit),
-    total: (result.counts && result.counts.total) || blocked.length,
-  };
-  return apiUrl('/src/dialog/dialog.html') + '?p=' + encodeURIComponent(JSON.stringify(payload));
+  var limit = config('maxRecipientsInMessage', 8);
+  var lines = blocked.slice(0, limit).map(function (b) {
+    var label = TYPE_LABEL[b.type] || b.type || '';
+    var who = b.address || '(アドレス未解決)';
+    return '・' + who + (label ? '（' + label + '）' : '');
+  });
+  if (blocked.length > limit) lines.push('・ほか ' + (blocked.length - limit) + ' 件');
+
+  var head = '許可リストに登録されていないドメイン宛の宛先が含まれています。内容を確認してから送信してください。\n\n';
+  var message = head + lines.join('\n');
+
+  if (message.length > MAX_MESSAGE_LENGTH) {
+    // 宛先を減らしてドメインの一覧だけにする
+    var domains = (result.blockedDomains || []).slice(0, 10).join('、');
+    message = head + '対象ドメイン: ' + domains;
+    if ((result.blockedDomains || []).length > 10) message += ' ほか';
+  }
+  return message.slice(0, MAX_MESSAGE_LENGTH);
 }
 
 /**
- * 独自ダイアログを表示し、'send' / 'cancel' を返す。
- * ダイアログを開けなかった場合は reject する（呼び出し側でフォールバック）。
+ * event.completed を一度だけ呼ぶためのラッパー。
+ * 期限タイマーと通常処理のどちらが先に来ても二重に完了させない。
  */
-function askUser(result) {
-  return new Promise(function (resolve, reject) {
-    Office.context.ui.displayDialogAsync(
-      buildDialogUrl(result),
-      { height: 55, width: 42, displayInIframe: true },
-      function (asyncResult) {
-        if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) {
-          reject(new Error((asyncResult.error && asyncResult.error.message) || 'dialog failed'));
-          return;
-        }
-        var dialog = asyncResult.value;
-        var settled = false;
-        var finish = function (answer) {
-          if (settled) return;
-          settled = true;
-          try {
-            dialog.close();
-          } catch (e) {
-            /* すでに閉じている */
-          }
-          resolve(answer);
-        };
-
-        dialog.addEventHandler(Office.EventType.DialogMessageReceived, function (arg) {
-          var message = {};
-          try {
-            message = JSON.parse(arg.message);
-          } catch (e) {
-            /* 想定外のメッセージは cancel 扱い */
-          }
-          finish(message.action === 'send' ? 'send' : 'cancel');
-        });
-
-        dialog.addEventHandler(Office.EventType.DialogEventReceived, function () {
-          // 12006: ユーザーがダイアログを閉じた → 送信しない
-          finish('cancel');
-        });
-      }
-    );
-  });
+function createCompleter(event) {
+  var done = false;
+  return function complete(options, stage) {
+    if (done) return;
+    done = true;
+    beacon('complete:' + stage);
+    try {
+      event.completed(options);
+    } catch (e) {
+      beacon('complete-threw:' + (e && e.message));
+    }
+  };
 }
 
-function completeAllow(event) {
-  event.completed({ allowEvent: true });
+function allowOptions() {
+  return { allowEvent: true };
 }
 
-function completeBlock(event, message) {
-  event.completed({
+/** SendMode="PromptUser" では、Outlook が「このまま送信 / 送信しない」を表示する。 */
+function promptOptions(message) {
+  return {
     allowEvent: false,
-    errorMessage: String(message).slice(0, 1000),
-  });
+    errorMessage: String(message).slice(0, MAX_MESSAGE_LENGTH),
+  };
 }
 
-/** Outlook 標準の「このまま送信 / 送信しない」ダイアログにフォールバックする。 */
-function completePrompt(event, message) {
-  try {
-    event.completed({
-      allowEvent: false,
-      errorMessage: String(message).slice(0, 1000),
-      sendModeOverride: Office.MailboxEnums.SendModeOverride.PromptUser,
-    });
-  } catch (e) {
-    // sendModeOverride 非対応クライアントでは SoftBlock のまま停止する。
-    completeBlock(event, message);
-  }
-}
-
-function handleFailure(event, err) {
-  console.error('[domain-guard] check failed:', err && err.message);
-  var message =
-    '宛先ドメインの確認に失敗しました（' +
-    ((err && err.message) || 'unknown error') +
-    '）。内容を確認してから送信してください。';
-  var mode = config('failMode', 'prompt');
-  if (mode === 'allow') completeAllow(event);
-  else if (mode === 'block') completeBlock(event, message);
-  else completePrompt(event, message);
-}
-
-function summarize(result) {
-  var domains = result.blockedDomains || [];
-  var head = domains.slice(0, 5).join('、');
-  if (domains.length > 5) head += ' ほか' + (domains.length - 5) + '件';
-  return '許可リストにないドメイン宛の宛先が含まれています: ' + head;
+function failureOptions(err) {
+  if (config('failMode', 'prompt') === 'allow') return allowOptions();
+  return promptOptions(
+    '宛先ドメインの確認ができませんでした（' +
+      ((err && err.message) || 'unknown error') +
+      '）。宛先を確認してから送信してください。'
+  );
 }
 
 function onMessageSendHandler(event) {
-  var item = Office.context.mailbox.item;
+  beacon('handler-start');
+  var complete = createCompleter(event);
 
-  getRecipients(item)
-    .then(function (recipients) {
-      if (!recipients.length) {
-        completeAllow(event);
-        return null;
-      }
-      return checkWithServer(recipients).then(function (result) {
-        if (!result || !result.blocked || result.blocked.length === 0) {
-          completeAllow(event);
+  // 保険: どこかで止まっても 5 秒の閾値より前に必ず完了させる
+  var deadline = setTimeout(function () {
+    complete(failureOptions(new Error('timeout')), 'deadline');
+  }, HARD_DEADLINE_MS);
+
+  function finish(options, stage) {
+    clearTimeout(deadline);
+    complete(options, stage);
+  }
+
+  try {
+    var item = Office.context.mailbox.item;
+    beacon('item:' + (item ? 'ok' : 'null'));
+
+    getRecipients(item)
+      .then(function (recipients) {
+        beacon('recipients:' + recipients.length);
+        if (!recipients.length) {
+          finish(allowOptions(), 'no-recipients');
           return null;
         }
-        return askUser(result).then(
-          function (answer) {
-            if (answer === 'send') completeAllow(event);
-            else completeBlock(event, '送信を中止しました。' + summarize(result));
-          },
-          function (dialogErr) {
-            // ダイアログを開けなかったときは Outlook 標準の確認ダイアログに委ねる。
-            console.error('[domain-guard] dialog failed:', dialogErr && dialogErr.message);
-            completePrompt(event, summarize(result) + ' 送信してよいか確認してください。');
-          }
-        );
+        return checkWithServer(recipients).then(function (result) {
+          var blocked = (result && result.blocked && result.blocked.length) || 0;
+          beacon('checked:blocked=' + blocked);
+          if (blocked === 0) finish(allowOptions(), 'allowed');
+          else finish(promptOptions(buildMessage(result)), 'prompt');
+        });
+      })
+      .catch(function (err) {
+        console.error('[domain-guard] check failed:', err && err.message);
+        beacon('error:' + ((err && err.message) || 'unknown'));
+        finish(failureOptions(err), 'error');
       });
-    })
-    .catch(function (err) {
-      handleFailure(event, err);
-    });
+  } catch (err) {
+    // 同期例外でも必ず完了させる（完了しないと Outlook が待ち続ける）
+    beacon('sync-error:' + ((err && err.message) || 'unknown'));
+    finish(failureOptions(err), 'sync-error');
+  }
 }
 
-// Office ランタイムへ登録（マニフェストの FunctionName と一致させること）
+// ---- ランタイムへの登録 ---------------------------------------------------------
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', function (e) {
+    beacon('window-error:' + (e && e.message));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    beacon('unhandled-rejection:' + (e && e.reason && e.reason.message));
+  });
+}
+
+beacon('script-loaded:office=' + (typeof Office !== 'undefined') + ',actions=' + !!(typeof Office !== 'undefined' && Office.actions));
+
+// マニフェストの FunctionName と一致させること
 if (typeof Office !== 'undefined' && Office.actions && Office.actions.associate) {
   Office.actions.associate('onMessageSendHandler', onMessageSendHandler);
+  beacon('associated');
+} else {
+  beacon('associate-unavailable');
+}
+
+// ホスト情報（どのクライアント・アカウント種別で動いているかの確認用）
+if (typeof Office !== 'undefined' && typeof Office.onReady === 'function') {
+  Office.onReady(function (info) {
+    var diag = 'ready:host=' + (info && info.host) + ',platform=' + (info && info.platform);
+    try {
+      var mb = Office.context.mailbox;
+      diag += ',type=' + (mb && mb.userProfile && mb.userProfile.accountType);
+      diag += ',req1.12=' + Office.context.requirements.isSetSupported('Mailbox', '1.12');
+    } catch (e) {
+      diag += ',diag-error=' + (e && e.message);
+    }
+    beacon(diag);
+  });
 }

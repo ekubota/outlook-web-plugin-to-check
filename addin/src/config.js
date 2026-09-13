@@ -4,18 +4,22 @@ window.DOMAIN_GUARD_CONFIG = {
   // API のベース URL（アドインの配信元と同一オリジンにしておくと CORS 不要）
   apiBaseUrl: '__BASE_URL__',
 
-  // API 呼び出しのタイムアウト（ミリ秒）
-  timeoutMs: 8000,
+  // API 呼び出しのタイムアウト（ミリ秒）。5 秒を超えると Outlook が
+  // 「予想以上に時間が掛かっています」ダイアログを出すため、それより短くしておく
+  timeoutMs: 3500,
 
   // API 呼び出しに失敗したときの挙動
-  //   'prompt' : Outlook 標準の「このまま送信 / 送信しない」ダイアログを出す（既定）
-  //   'block'  : 送信を止める
+  //   'prompt' : 確認ダイアログ（このまま送信 / 送信しない）を出す（既定）
   //   'allow'  : そのまま送信させる
   failMode: 'prompt',
 
-  // ダイアログに個別表示する宛先の最大件数（超過分は「ほか N 件」と表示）
-  maxRecipientsInDialog: 20,
+  // 確認ダイアログに個別表示する宛先の最大件数（本文は 500 文字まで）
+  maxRecipientsInMessage: 8,
 
   // サーバ側で API キーを設定した場合のみ指定（クライアントに埋め込まれる点に注意）
   apiKey: '',
+
+  // 診断用: true にすると処理の各段階で /health?stage=... を呼び、Cloud Run のログで進行状況を追える
+  // （送信 1 回につき 8 リクエスト程度増えるため、調査するときだけ有効にする）
+  debugBeacon: false,
 };

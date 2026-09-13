@@ -3,3 +3,14 @@ server/public/
 dist/
 *.log
 .env
+
+# Terraform
+terraform/.terraform/
+terraform/.build/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/*.tfvars.example
+# 複数 OS で使うため lock ファイルは共有しない（各自の terraform init で生成される）
+terraform/.terraform.lock.hcl
+terraform/tfplan
