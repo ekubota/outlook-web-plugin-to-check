@@ -178,8 +178,9 @@ curl -X POST https://<サービス URL>/api/check \
 | 送信してもダイアログが出ない | リロード忘れ、または宛先が許可リスト内（`/api/allowlist` で確認） |
 | 「宛先ドメインの確認ができませんでした」が出る | API 呼び出しの失敗・タイムアウト（コールドスタート等）。下のログで原因を確認 |
 
-ハンドラーは処理の各段階で `/health?stage=...` を呼ぶ診断機能（`debugBeacon`、既定で有効）を持っているので、
-どこで止まったかを Cloud Run のログで追えます。
+ハンドラーは処理の各段階で `/health?stage=...` を呼ぶ診断機能（`debugBeacon`、**既定は無効**）を持っています。
+調査するときは `addin/src/config.js` で `debugBeacon: true` にしてビルド・再デプロイ（と強制リロード）すると、
+どこで止まったかを Cloud Run のログで追えます。調査が終わったら `false` に戻してください。
 
 ```bash
 gcloud logging read \
@@ -248,9 +249,8 @@ gcloud run services update domain-guard --region asia-northeast1 \
 | `failMode` | `'prompt'` | API 失敗時: `prompt`（確認ダイアログを出す）/ `allow`（そのまま送信） |
 | `maxRecipientsInMessage` | `8` | ダイアログ本文に個別表示する宛先の件数（本文は 500 文字まで。超える場合はドメイン一覧に切り替え） |
 | `apiKey` | `''` | `API_KEY` を設定した場合に指定 |
-| `debugBeacon` | `true` | 処理の各段階で `/health?stage=...` を呼ぶ診断機能。送信 1 回につき 8 リクエスト程度増えるので、運用が安定したら `false` に |
+| `debugBeacon` | `false` | 処理の各段階で `/health?stage=...` を呼ぶ診断機能。送信 1 回につき 8 リクエスト程度増えるので、調査するときだけ `true` に |
 
-`debugBeacon` は `config.js` に書かれていない場合、`launchevent.js` の既定値（`true`）が使われます。
 変更後は `node scripts/build.js <URL>` と再デプロイが必要です。
 
 ### 送信時の挙動（`addin/manifest.xml` の `SendMode`）

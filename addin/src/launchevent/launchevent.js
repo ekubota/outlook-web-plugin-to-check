@@ -21,8 +21,9 @@ var DEFAULTS = {
   failMode: 'prompt',
   maxRecipientsInMessage: 8,
   apiKey: '',
-  // 診断用: true のとき処理の各段階で /health?stage=... を呼ぶ（Cloud Run のログで追跡できる）
-  debugBeacon: true,
+  // 診断用: true のとき処理の各段階で /health?stage=... を呼ぶ（Cloud Run のログで追跡できる）。
+  // 送信のたびにリクエストが増えるため既定は無効。調査時のみ config.js で true にする
+  debugBeacon: false,
 };
 
 var CONFIG = (typeof window !== 'undefined' && window.DOMAIN_GUARD_CONFIG) || {};

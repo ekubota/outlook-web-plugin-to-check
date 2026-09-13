@@ -18,4 +18,8 @@ window.DOMAIN_GUARD_CONFIG = {
 
   // サーバ側で API キーを設定した場合のみ指定（クライアントに埋め込まれる点に注意）
   apiKey: '',
+
+  // 診断用: true にすると処理の各段階で /health?stage=... を呼び、Cloud Run のログで進行状況を追える
+  // （送信 1 回につき 8 リクエスト程度増えるため、調査するときだけ有効にする）
+  debugBeacon: false,
 };
