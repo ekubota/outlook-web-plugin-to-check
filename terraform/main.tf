@@ -26,6 +26,7 @@ locals {
     local.allowlist_gcs_uri != null ? { ALLOWLIST_GCS_URI = local.allowlist_gcs_uri } : {},
     length(var.allowed_origins) > 0 ? { ALLOWED_ORIGINS = join(",", var.allowed_origins) } : {},
     var.api_key != "" ? { API_KEY = var.api_key } : {},
+    var.admin_api_key != "" ? { ADMIN_API_KEY = var.admin_api_key } : {},
   )
 }
 

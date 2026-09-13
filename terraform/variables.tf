@@ -73,6 +73,16 @@ variable "api_key" {
   sensitive   = true
 }
 
+variable "admin_api_key" {
+  description = <<-EOT
+    管理用の /api/allowlist を有効にするキー（X-Admin-Key ヘッダーで指定）。
+    空のままなら /api/allowlist は常に 404（非公開）。アドインには埋め込まれない。
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "allowed_origins" {
   description = "CORS で許可するオリジン。アドインと API が同一オリジンなら不要"
   type        = list(string)

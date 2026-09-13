@@ -16,5 +16,9 @@ allowlist_in_gcs = true
 # API キーを要求する場合（addin/src/config.js の apiKey にも同じ値を入れてビルドすること）
 # api_key = "change-me"
 
+# 管理用の /api/allowlist を使う場合のみ（未設定なら 404 で非公開。アドインには埋め込まれない）
+# 例: openssl rand -hex 32 で生成し、curl -H "X-Admin-Key: <キー>" https://<URL>/api/allowlist
+# admin_api_key = "change-me"
+
 # コールドスタートを避けたい場合は 1 以上（常時課金される）
 min_instances = 0

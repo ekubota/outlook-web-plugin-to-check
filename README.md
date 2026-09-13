@@ -26,7 +26,7 @@ Outlook 標準の Smart Alerts ダイアログ（対象の宛先一覧を表示�
 | `addin/manifest.xml` | アドインのマニフェスト（`__BASE_URL__` はビルド時に置換） |
 | `addin/src/launchevent/` | 送信時イベントハンドラー（宛先取得 → API で判定 → 結果を Outlook に返す） |
 | `addin/src/config.js` | クライアント側設定（API URL、タイムアウト、失敗時の挙動） |
-| `server/index.js` | Cloud Run functions 本体（`/api/check`、`/api/allowlist` と静的配信） |
+| `server/index.js` | Cloud Run functions 本体（`/api/check`、管理用の `/api/allowlist` と静的配信） |
 | `server/lib/allowlist.js` | ドメイン正規化と許可リスト照合ロジック |
 | `server/config/allowlist.json` | 同梱の許可ドメイン一覧 |
 | `scripts/build.js` | `addin/` を `server/public/` にコピーし URL を埋め込む |
@@ -123,7 +123,6 @@ terraform apply
 
 ```bash
 curl https://<サービス URL>/health
-curl https://<サービス URL>/api/allowlist
 curl -X POST https://<サービス URL>/api/check \
   -H 'Content-Type: application/json' \
   -d '{"sender":"me@example.com","to":[{"address":"a@example.com"},{"address":"b@gmail.com"}]}'
@@ -175,7 +174,7 @@ curl -X POST https://<サービス URL>/api/check \
 | 症状 | 原因・対処 |
 | --- | --- |
 | 「予想以上に時間が掛かっています」が出る | 古い JS がブラウザーにキャッシュされている（静的ファイルは最大 5 分キャッシュ）。**Ctrl+Shift+R で強制リロード**。マニフェストを変えた場合はアドインを削除→再追加 |
-| 送信してもダイアログが出ない | リロード忘れ、または宛先が許可リスト内（`/api/allowlist` で確認） |
+| 送信してもダイアログが出ない | リロード忘れ、または宛先が許可リスト内（「許可リストの中身を確認する」の方法で確認） |
 | 「宛先ドメインの確認ができませんでした」が出る | API 呼び出しの失敗・タイムアウト（コールドスタート等）。下のログで原因を確認 |
 
 ハンドラーは処理の各段階で `/health?stage=...` を呼ぶ診断機能（`debugBeacon`、**既定は無効**）を持っています。
@@ -222,6 +221,23 @@ gcloud logging read \
 Cloud Storage を使う場合は、Cloud Run のサービスアカウントに
 `roles/storage.objectViewer` を付与してください。
 
+### 許可リストの中身を確認する
+
+許可リストは外部に公開していません。アドインは `/api/check` に宛先を送り、判定結果（どの宛先がブロック対象か）だけを
+受け取るので、許可リスト全体を取得する必要はありません。管理者は次のいずれかで確認します。
+
+- **GCS から直接読む**（プロジェクトの権限が必要）:
+  `gcloud storage cat gs://<project>-<name>-config/allowlist.json`
+- **リポジトリの `server/config/allowlist.json` を見る**（`terraform apply` で GCS にアップロードされる内容と同じ）
+- **管理用 API を使う**: `ADMIN_API_KEY`（Terraform では `admin_api_key` 変数）を設定した場合だけ、
+  `curl -H "X-Admin-Key: <キー>" https://<サービス URL>/api/allowlist` で取得できます。
+  `?refresh=1` を付けると GCS から即時に再読み込みします（通常は最大 5 分キャッシュ）。
+  キーが未設定・不一致のときは 404 を返し、エンドポイントの存在自体を知らせません。
+  このキーはサーバー側だけが持ち、アドインの JS には埋め込まれません
+
+> `/api/check` は公開のままなので、宛先を 1 件ずつ送れば「そのドメインが許可されているか」は推測できます。
+> 一覧をまとめて取られることは防げますが、1 件ずつの推測まで防ぐには利用者の認証（Entra ID トークンの検証など）が必要です。
+
 ## 設定項目
 
 ### サーバー（環境変数）
@@ -232,7 +248,8 @@ Cloud Storage を使う場合は、Cloud Run のサービスアカウントに
 | `ALLOWLIST_GCS_URI` | （なし） | `gs://bucket/allowlist.json` |
 | `ALLOWLIST_CACHE_TTL_MS` | `300000` | 許可リストのキャッシュ時間 |
 | `AUTO_ALLOW_SENDER_DOMAIN` | `true` | 送信者自身のドメインを自動的に許可 |
-| `API_KEY` | （なし） | 設定すると `X-Api-Key` ヘッダーを要求 |
+| `API_KEY` | （なし） | 設定すると `X-Api-Key` ヘッダーを要求（アドインの JS に埋め込むため利用者から見える） |
+| `ADMIN_API_KEY` | （なし） | 設定すると管理用の `/api/allowlist` が `X-Admin-Key` ヘッダー付きで使える。未設定なら常に 404 |
 | `ALLOWED_ORIGINS` | （なし） | CORS 許可オリジン（同一オリジン配信なら不要） |
 | `MAX_RECIPIENTS` | `500` | 1 リクエストで判定する宛先の上限 |
 
@@ -267,7 +284,7 @@ gcloud run services update domain-guard --region asia-northeast1 \
 ## テスト
 
 ```bash
-npm test                 # サーバー側ロジックのユニットテスト（13 件）
+npm test                 # サーバー側ロジックのユニットテスト（17 件）
 npm start                # http://localhost:8080 でローカル起動（API の確認用）
 ```
 

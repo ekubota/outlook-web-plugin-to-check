@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const functions = require('@google-cloud/functions-framework');
@@ -40,14 +41,31 @@ function applyCors(req, res) {
   res.set('Access-Control-Max-Age', '3600');
 }
 
+/** Compares two secrets in constant time (hashing first so lengths don't leak). */
+function safeEqual(provided, expected) {
+  const a = crypto.createHash('sha256').update(String(provided)).digest();
+  const b = crypto.createHash('sha256').update(String(expected)).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 function authorized(req) {
   if (!API_KEY) return true;
-  const provided = req.get('x-api-key') || '';
-  // Constant-time-ish compare; lengths differ often enough that this is fine.
-  if (provided.length !== API_KEY.length) return false;
-  let diff = 0;
-  for (let i = 0; i < provided.length; i++) diff |= provided.charCodeAt(i) ^ API_KEY.charCodeAt(i);
-  return diff === 0;
+  return safeEqual(req.get('x-api-key') || '', API_KEY);
+}
+
+/**
+ * Admin-only endpoints require ADMIN_API_KEY. It is read at call time and is never
+ * embedded in the add-in, unlike API_KEY. When it is unset, admin endpoints don't exist.
+ */
+function adminAuthorized(req) {
+  const adminKey = process.env.ADMIN_API_KEY || '';
+  if (!adminKey) return false;
+  const provided = req.get('x-admin-key') || '';
+  return provided !== '' && safeEqual(provided, adminKey);
+}
+
+function notFound(res) {
+  res.status(404).send('Not found');
 }
 
 /** Normalizes the request body into a flat recipient array. */
@@ -140,12 +158,14 @@ async function handleCheck(req, res) {
   });
 }
 
+/** Returns the full allowlist. Admin only; responds 404 to everyone else. */
 async function handleAllowlist(req, res) {
-  if (!authorized(req)) {
-    res.status(401).json({ error: 'unauthorized' });
+  if (!adminAuthorized(req)) {
+    notFound(res);
     return;
   }
   const list = await allowlist.get({ force: req.query.refresh === '1' });
+  res.set('Cache-Control', 'no-store');
   res.status(200).json({
     version: list.version,
     source: list.source,
@@ -164,7 +184,7 @@ function serveStatic(req, res) {
   }
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
-      res.status(404).send('Not found');
+      notFound(res);
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
