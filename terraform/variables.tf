@@ -98,14 +98,25 @@ variable "allow_unauthenticated" {
 # ---- スケール・リソース ------------------------------------------------------
 
 variable "min_instances" {
-  description = "最小インスタンス数。0 だとコールドスタートが発生する（送信時に数秒待たされることがある）"
+  description = "最小インスタンス数。0 なら未使用時は 0 台で費用がかからないが、コールドスタートが発生する（1 以上は常時課金）"
   type        = number
   default     = 0
+
+  validation {
+    condition     = var.min_instances >= 0
+    error_message = "min_instances は 0 以上にしてください（max_instances 以下であること）。"
+  }
 }
 
 variable "max_instances" {
-  type    = number
-  default = 10
+  description = "最大インスタンス数。1 ならスケールアウトせず、大量アクセス時も課金に上限がかかる（1 台で同時 80 リクエスト、超過分は 429）"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.max_instances >= 1
+    error_message = "max_instances は 1 以上にしてください。"
+  }
 }
 
 variable "memory" {
