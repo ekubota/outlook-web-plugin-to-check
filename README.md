@@ -12,9 +12,11 @@ Outlook（ブラウザー版 / 新しい Outlook / デスクトップ版）で�
    ↓ POST /api/check
 Cloud Run: 許可リストと照合 → 許可外の宛先を返す
    ↓ 該当あり
-アドイン: 独自ダイアログを表示
-   ├─「このまま送信する」→ event.completed({ allowEvent: true })  → 送信される
-   └─「送信しない」      → event.completed({ allowEvent: false }) → 送信が止まる
+アドイン: event.completed({ allowEvent: false, errorMessage: "…" })
+   ↓ SendMode="PromptUser"
+Outlook 標準の Smart Alerts ダイアログ（対象の宛先一覧を表示）
+   ├─「このまま送信」→ 送信される
+   └─「送信しない」  → 送信が止まる
 ```
 
 ## 構成
@@ -22,8 +24,7 @@ Cloud Run: 許可リストと照合 → 許可外の宛先を返す
 | パス | 内容 |
 | --- | --- |
 | `addin/manifest.xml` | アドインのマニフェスト（`__BASE_URL__` はビルド時に置換） |
-| `addin/src/launchevent/` | 送信時イベントハンドラー（判定 → ダイアログ → 可否決定） |
-| `addin/src/dialog/` | 確認ダイアログの UI |
+| `addin/src/launchevent/` | 送信時イベントハンドラー（宛先取得 → API で判定 → 結果を Outlook に返す） |
 | `addin/src/config.js` | クライアント側設定（API URL、タイムアウト、失敗時の挙動） |
 | `server/index.js` | Cloud Run functions 本体（`/api/check`、`/api/allowlist` と静的配信） |
 | `server/lib/allowlist.js` | ドメイン正規化と許可リスト照合ロジック |
@@ -32,17 +33,23 @@ Cloud Run: 許可リストと照合 → 許可外の宛先を返す
 | `scripts/deploy.js` | ビルド → `gcloud run deploy` → URL 確定後に再デプロイ（gcloud 派） |
 | `terraform/` | 同じ構成を Terraform で管理する場合（Terraform 派） |
 
+確認ダイアログは Outlook 組み込みの Smart Alerts ダイアログを使います。イベントベースアクティブ化の
+ハンドラー内では `displayDialogAsync` などの UI API が
+[使用できない](https://learn.microsoft.com/office/dev/add-ins/develop/event-based-activation#unsupported-apis)ため、
+独自ダイアログは実装できません（本文は 500 文字まで、ボタンは「このまま送信 / 送信しない」固定）。
+
 アドインの静的ファイルは同じ Cloud Run サービスから配信します。アドインと API が
 **同一オリジン**になるため CORS 設定が不要で、管理する URL も 1 つで済みます。
 
 ## 前提条件
 
-- Microsoft 365 の職場・学校アカウント（Exchange Online）
-  - **Outlook.com の個人アカウント（Hotmail/live.com 等）は非対応です。**
-    Smart Alerts（`OnMessageSend`）のサポートクライアント表はバックエンドが
-    Exchange Online / Exchange Server のマイルボックスに限定されており、
-    個人アカウントのバックエンドは対象外です
-    （[公式ドキュメントのサポート表](https://learn.microsoft.com/office/dev/add-ins/outlook/onmessagesend-onappointmentsend-events#supported-clients-and-platforms)）。
+- Outlook のアカウント
+  - Microsoft 365 の職場・学校アカウント（Exchange Online）: 公式サポート対象
+  - 個人の Outlook.com アカウント（Hotmail/live.com 等）: **Outlook on the web で動作を確認済み**（2026-09-13、
+    診断ログで `accountType=outlookCom`・Mailbox 1.12 対応を確認）。ただし Smart Alerts の
+    [公式サポート表](https://learn.microsoft.com/office/dev/add-ins/outlook/onmessagesend-onappointmentsend-events#supported-clients-and-platforms)
+    には Exchange Online / Exchange Server しか記載がなく、保証された構成ではありません。
+    組織で運用する場合は職場・学校アカウントを前提にしてください
 - Outlook 要件セット **Mailbox 1.12** 以上
   - Outlook on the web / 新しい Outlook for Windows: 対応済み
   - classic Outlook for Windows: 2206 (build 15330.20196) 以上
@@ -106,8 +113,9 @@ terraform apply
 - ビルド用・実行用に専用のサービスアカウントを作成し、デフォルトの Compute SA は使いません。
   組織ポリシーで `allUsers` への公開が禁止されている場合（`iam.allowedPolicyMemberDomains`）は
   apply が失敗するので、ポリシー側で例外を設定してください。
-- `terraform output` の `service_uri` が `base_url` と一致することを確認してください。
-  異なる場合（古い URL 形式のリージョンなど）は `base_url` 変数で実際の URL を指定して再 apply します。
+- `terraform output` の `service_uri` が `base_url` と異なる文字列になることがありますが
+  （旧形式の `https://<name>-<hash>-an.a.run.app`）、どちらも同じサービスに届くので問題ありません。
+  アドインには決定的 URL の `base_url` が埋め込まれます。
 - state は既定でローカルです。チームで運用する場合は `versions.tf` の `backend "gcs"` を有効にしてください。
 - `terraform` 実行者には作成した 2 つのサービスアカウントに対する `iam.serviceAccounts.actAs` が必要です（プロジェクトのオーナー/編集者なら可）。
 
@@ -123,6 +131,10 @@ curl -X POST https://<サービス URL>/api/check \
 
 ## 2. Outlook への登録
 
+> **登録するのは `dist/manifest.xml` です。** `addin/manifest.xml` は `__BASE_URL__` を含むテンプレートなので、
+> そのまま追加すると「IconUrl の値 '__BASE_URL__/…' は正しい形式の URL ではありません」で失敗します。
+> 「URL から追加」で `https://<サービス URL>/manifest.xml` を指定しても同じものが使えます。
+
 サイドロード（自分のアカウントでの動作確認用）と、管理者配置（組織展開・強制用）の
 2通りがあります。**`OnMessageSend` はサイドロードでも実際に発火します**
 （Microsoft 公式の [Smart Alerts walkthrough](https://learn.microsoft.com/office/dev/add-ins/outlook/smart-alerts-onmessagesend-walkthrough#try-it-out)
@@ -136,12 +148,12 @@ curl -X POST https://<サービス URL>/api/check \
 
 ### 動作確認する（サイドロード）
 
-1. Microsoft 365 の職場・学校アカウントで Outlook on the web にサインインした状態で、
+1. Outlook on the web にサインインした状態で（職場・学校アカウント、または個人の Outlook.com）、
    同じブラウザーから **https://aka.ms/olksideload** を開く（「Outlook 用アドイン」ダイアログが直接開きます。
    現在の Outlook on the web の設定画面には「アドインを管理」の項目はありません）
 2. 「マイ アドイン」→ 下部の「カスタム アドイン」→「カスタム アドインの追加」→「ファイルから追加...」
 3. `dist/manifest.xml` を選択し、警告ダイアログで「インストール」
-4. **Outlook のタブをリロード**（イベントハンドラーの登録はリロード後に有効になります）
+4. **Outlook のタブを強制リロード（Ctrl+Shift+R）**（イベントハンドラーの登録はリロード後に有効になります）
 5. 新規メールで許可リスト外のドメイン宛（例: `someone@gmail.com`）を入れて「送信」→ 確認ダイアログが出れば OK
 
 > 「ファイルから追加」が表示されない場合は、テナント管理者がカスタム アドインのインストールを
@@ -157,6 +169,28 @@ curl -X POST https://<サービス URL>/api/check \
 3. `dist/manifest.xml` を選択してアップロード
 4. 割り当て先（全員 / 特定のユーザー・グループ）を選択
 5. 反映には最大 24 時間かかることがあります（通常は数時間〜）。対象ユーザーは Outlook をリロードしてください
+
+### うまく動かないとき
+
+| 症状 | 原因・対処 |
+| --- | --- |
+| 「予想以上に時間が掛かっています」が出る | 古い JS がブラウザーにキャッシュされている（静的ファイルは最大 5 分キャッシュ）。**Ctrl+Shift+R で強制リロード**。マニフェストを変えた場合はアドインを削除→再追加 |
+| 送信してもダイアログが出ない | リロード忘れ、または宛先が許可リスト内（`/api/allowlist` で確認） |
+| 「宛先ドメインの確認ができませんでした」が出る | API 呼び出しの失敗・タイムアウト（コールドスタート等）。下のログで原因を確認 |
+
+ハンドラーは処理の各段階で `/health?stage=...` を呼ぶ診断機能（`debugBeacon`、既定で有効）を持っているので、
+どこで止まったかを Cloud Run のログで追えます。
+
+```bash
+gcloud logging read \
+  'resource.type=cloud_run_revision AND resource.labels.service_name=domain-guard AND httpRequest.requestUrl:*' \
+  --project <PROJECT_ID> --freshness=30m --limit=30 \
+  --format="table(timestamp,httpRequest.requestMethod,httpRequest.requestUrl.segment(3),httpRequest.status)"
+```
+
+正常時は `script-loaded` → `associated` → `ready:...` → `handler-start` → `item:ok` → `recipients:N` →
+`POST /api/check` → `checked:blocked=N` → `complete:prompt`（または `complete:allowed`）の順に並びます。
+`ready:` にはホスト・プラットフォーム・アカウント種別・Mailbox 1.12 対応可否が記録されます。
 
 ## 3. 許可ドメインの運用
 
@@ -210,20 +244,25 @@ gcloud run services update domain-guard --region asia-northeast1 \
 
 | キー | 既定値 | 説明 |
 | --- | --- | --- |
-| `timeoutMs` | `8000` | API 呼び出しのタイムアウト |
-| `failMode` | `'prompt'` | API 失敗時: `prompt`（Outlook 標準の確認）/ `block`（送信中止）/ `allow`（そのまま送信） |
-| `maxRecipientsInDialog` | `20` | ダイアログに個別表示する宛先の件数 |
+| `timeoutMs` | `3500` | API 呼び出しのタイムアウト。ハンドラー全体の期限（4.5 秒）と Outlook の閾値（5 秒）に収まるようにする |
+| `failMode` | `'prompt'` | API 失敗時: `prompt`（確認ダイアログを出す）/ `allow`（そのまま送信） |
+| `maxRecipientsInMessage` | `8` | ダイアログ本文に個別表示する宛先の件数（本文は 500 文字まで。超える場合はドメイン一覧に切り替え） |
 | `apiKey` | `''` | `API_KEY` を設定した場合に指定 |
+| `debugBeacon` | `true` | 処理の各段階で `/health?stage=...` を呼ぶ診断機能。送信 1 回につき 8 リクエスト程度増えるので、運用が安定したら `false` に |
 
+`debugBeacon` は `config.js` に書かれていない場合、`launchevent.js` の既定値（`true`）が使われます。
 変更後は `node scripts/build.js <URL>` と再デプロイが必要です。
 
 ### 送信時の挙動（`addin/manifest.xml` の `SendMode`）
 
 | 値 | 挙動 |
 | --- | --- |
-| `SoftBlock`（既定） | 「送信しない」を選ぶと送信が中止される。ハンドラーが動かない環境では送信可能 |
-| `Block` | `SoftBlock` に加え、ハンドラーが完了できない場合も送信不可（オフライン時など厳格） |
-| `PromptUser` | 独自ダイアログで「送信しない」を選んでも Outlook 標準の「このまま送信」が出てしまうため非推奨 |
+| `PromptUser`（既定） | 許可リスト外があると「このまま送信 / 送信しない」の確認が出る。アドインが動かない環境では送信される |
+| `SoftBlock` | 「送信しない」のみで、許可リスト外には送れなくなる。アドインが動かない環境では送信される |
+| `Block` | `SoftBlock` に加え、アドインが完了できない場合（オフライン等）も送信不可。最も厳格 |
+
+「注意喚起」ではなく「許可リスト外への送信を禁止」したい場合は `SoftBlock` または `Block` に変更してください
+（マニフェストの変更後は、サイドロードならアドインの削除→再追加、管理者配置なら再アップロードが必要です）。
 
 ## テスト
 
@@ -246,11 +285,11 @@ npm start                # http://localhost:8080 でローカル起動（API の
   秘匿が必要な場合は `ALLOWED_ORIGINS` の設定に加え、
   Office SSO（`getAccessTokenAsync`）で取得した Microsoft Entra ID トークンを
   サーバーで検証する方式に切り替えてください。
-- 宛先が多いメールや API が遅い場合、送信までに数秒待たされます
-  （`timeoutMs` 経過後は `failMode` に従います）。
-- Cloud Run はコールドスタートがあるため、待ち時間が気になる場合は
-  `--min-instances=1` を設定してください。
-- 送信時イベントのハンドラーは Outlook 側の制限で一定時間内（数分）に完了する必要があります。
-  ダイアログを開いたまま放置すると、送信がキャンセルされる場合があります。
+- ハンドラーが 5 秒以内に完了しないと Outlook が「予想以上に時間が掛かっています」ダイアログを出します。
+  このためハンドラーは **4.5 秒で必ず完了する保険タイマー**を持ち、API の `timeoutMs` は 3.5 秒にしてあります。
+  期限を過ぎた場合は `failMode` に従い、既定では「確認できませんでした」の確認ダイアログを出します。
+- Cloud Run はコールドスタートがあるため（1〜3 秒程度）、「確認できませんでした」が頻繁に出るようなら
+  `min_instances = 1`（Terraform）または `--min-instances=1`（gcloud）を設定してください。
 - ログには宛先ドメイン（および件数）が出力されます。メールアドレス本体は出力していませんが、
   運用ポリシーに応じて `server/index.js` の `console.log` を調整してください。
+  `debugBeacon` のログにはアドレスは含まれず、段階名と件数のみです。

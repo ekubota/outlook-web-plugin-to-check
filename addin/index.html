@@ -4,22 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>宛先ドメイン チェック</title>
-    <link rel="stylesheet" href="./src/dialog/dialog.css" />
+    <style>
+      body { margin: 0; padding: 24px; font-family: "Segoe UI", "Yu Gothic UI", system-ui, sans-serif; font-size: 14px; color: #1b1a19; background: #fff; }
+      h1 { display: flex; align-items: center; gap: 10px; font-size: 18px; margin: 0 0 12px; }
+      p, li { line-height: 1.6; }
+      code { background: #f3f2f1; padding: 1px 4px; border-radius: 3px; }
+      @media (prefers-color-scheme: dark) { body { color: #f3f2f1; background: #1f1f1f; } code { background: #3b3a39; } }
+    </style>
   </head>
   <body>
-    <main class="card">
-      <header class="head">
-        <img src="./assets/icon-32.png" width="32" height="32" alt="" />
-        <h1>宛先ドメイン チェック</h1>
-      </header>
-      <p class="lead">
-        Outlook 用アドインの配信元です。管理者はこのサイトの
-        <a href="./manifest.xml">manifest.xml</a> を Microsoft 365 管理センターに登録してください。
-      </p>
-      <ul class="list">
-        <li class="item"><a href="./api/allowlist">/api/allowlist</a> — 現在の許可ドメイン一覧</li>
-        <li class="item"><a href="./health">/health</a> — ヘルスチェック</li>
-      </ul>
-    </main>
+    <h1><img src="./assets/icon-32.png" width="32" height="32" alt="" /> 宛先ドメイン チェック</h1>
+    <p>
+      Outlook 用アドインの配信元です。管理者はこのサイトの
+      <a href="./manifest.xml">manifest.xml</a> を Microsoft 365 管理センターに登録してください。
+    </p>
+    <ul>
+      <li><a href="./api/allowlist">/api/allowlist</a> — 現在の許可ドメイン一覧</li>
+      <li><a href="./health">/health</a> — ヘルスチェック</li>
+    </ul>
   </body>
 </html>

@@ -69,12 +69,12 @@
             <FunctionFile resid="WebViewRuntime.Url" />
 
             <!-- 送信時イベント。SendMode の選択肢:
-                   SoftBlock  : ハンドラーが allowEvent:false を返すと送信を止める（既定・推奨）
-                   Block      : SoftBlock と同様だが、ハンドラー未完了時も送信不可
-                   PromptUser : allowEvent:false のとき Outlook 標準の「このまま送信」確認が出る -->
+                   PromptUser : allowEvent:false のとき Outlook が「このまま送信 / 送信しない」を表示（既定・推奨）
+                   SoftBlock  : 「送信しない」のみ。ハンドラーが動かない環境では送信可能
+                   Block      : SoftBlock に加え、ハンドラー未完了時も送信不可（最も厳格） -->
             <ExtensionPoint xsi:type="LaunchEvent">
               <LaunchEvents>
-                <LaunchEvent Type="OnMessageSend" FunctionName="onMessageSendHandler" SendMode="SoftBlock" />
+                <LaunchEvent Type="OnMessageSend" FunctionName="onMessageSendHandler" SendMode="PromptUser" />
               </LaunchEvents>
               <SourceLocation resid="WebViewRuntime.Url" />
             </ExtensionPoint>
